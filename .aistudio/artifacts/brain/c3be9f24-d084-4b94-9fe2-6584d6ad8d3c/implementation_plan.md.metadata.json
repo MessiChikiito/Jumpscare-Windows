@@ -1,0 +1,6 @@
+{
+  "summary":  "Plan de implementación para Random Jumpscare Windows 11 (Foxy Edition). Detalla la arquitectura de la aplicación web interactiva con simulador en tiempo real y el generador/descargador del proyecto nativo en Python (PySide6 + python-vlc + PyInstaller), cubriendo los tres modos de activación, la biblioteca de vídeos con clips precargados de FNAF, opciones de reproducción a pantalla completa, compatibilidad con videojuegos (Minecraft), controles de emergencia y persistencia de configuración.",
+  "updatedAt":  "2026-10-22T19:43:29.427003846Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

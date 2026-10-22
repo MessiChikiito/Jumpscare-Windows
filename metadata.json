@@ -1,0 +1,6 @@
+{
+  "name": "Random Jumpscare Windows 11 (Foxy Edition)",
+  "description": "Aplicación de jumpscares aleatorios para Windows 11 inspirada en FNAF Foxy con 3 modos de activación, biblioteca de vídeos, detección de juegos y empaquetador .exe en Python.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

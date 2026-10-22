@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    font-family: 'DM Sans', system-ui, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+
+  .font-mono, code, pre, .tabular-nums {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Pure camera shake animation without annoying brightness or invert flickering */
+@keyframes violent-shake {
+  0% { transform: translate(0, 0) scale(1); }
+  10% { transform: translate(-8px, 5px) scale(1.03) rotate(-0.5deg); }
+  20% { transform: translate(9px, -6px) scale(1.05) rotate(0.8deg); }
+  30% { transform: translate(-10px, -4px) scale(1.07) rotate(-0.8deg); }
+  40% { transform: translate(8px, 7px) scale(1.05) rotate(0.5deg); }
+  50% { transform: translate(-6px, 9px) scale(1.08) rotate(-0.6deg); }
+  60% { transform: translate(9px, -8px) scale(1.06) rotate(0.8deg); }
+  70% { transform: translate(-8px, -5px) scale(1.04) rotate(-0.5deg); }
+  80% { transform: translate(6px, 4px) scale(1.02) rotate(0.4deg); }
+  90% { transform: translate(-4px, 2px) scale(1.01); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+@keyframes crt-scanlines {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 100%; }
+}
+
+@keyframes red-flash {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 0.35; }
+}
+
+.animate-violent-shake {
+  animation: violent-shake 0.12s infinite;
+}
+
+.animate-red-flash {
+  animation: red-flash 0.2s infinite;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0b0f17;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
