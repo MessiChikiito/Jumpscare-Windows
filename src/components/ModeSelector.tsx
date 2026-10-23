@@ -23,10 +23,11 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
         <div>
           <h2 className="text-sm font-semibold text-slate-100">
-            Modos de Activación
+            ¿Cuándo quieres que salga el susto?
           </h2>
           <p className="text-xs text-slate-400">
-            Selecciona la regla matemática que desencadenará los jumpscares
+            Los tres modos hacen lo mismo (reproducir un jumpscare); solo cambia cómo se decide el
+            momento. Elige el que te resulte más fácil.
           </p>
         </div>
       </div>
@@ -46,8 +47,8 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
             <Timer className="h-4 w-4" />
           </div>
           <div>
-            <div className="font-semibold text-slate-200">Modo 1: Intervalo Fijo</div>
-            <div className="text-[11px] text-slate-400">Cada lapso de tiempo exacto</div>
+            <div className="font-semibold text-slate-200">Siempre cada X tiempo</div>
+            <div className="text-[11px] text-slate-400">Reloj fijo · fácil de controlar</div>
           </div>
         </button>
 
@@ -64,8 +65,8 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
             <Shuffle className="h-4 w-4" />
           </div>
           <div>
-            <div className="font-semibold text-slate-200">Modo 2: Intervalo Aleatorio</div>
-            <div className="text-[11px] text-slate-400">Rango dinámico entre Mín y Máx</div>
+            <div className="font-semibold text-slate-200">En algún momento entre X y Y</div>
+            <div className="text-[11px] text-slate-400">Hora impredecible · más sorpresa</div>
           </div>
         </button>
 
@@ -82,8 +83,8 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
             <Percent className="h-4 w-4" />
           </div>
           <div>
-            <div className="font-semibold text-slate-200">Modo 3: Probabilidad</div>
-            <div className="text-[11px] text-slate-400">Tirada periódica con Cooldown</div>
+            <div className="font-semibold text-slate-200">Al azar con un % de probabilidad</div>
+            <div className="text-[11px] text-slate-400">Puede tardar mucho o nada</div>
           </div>
         </button>
       </div>
@@ -91,12 +92,19 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
       {/* Mode 1 Specific Controls: Fixed Interval */}
       {currentMode === 'fixed' && (
         <div className="bg-[#0e1523] border border-slate-800/80 rounded-lg p-4 space-y-3">
+          <div className="rounded-lg bg-sky-950/30 border border-sky-800/50 p-3 text-xs text-sky-200 leading-relaxed">
+            <strong className="block mb-0.5 text-sky-100">Así funciona:</strong>
+            El susto siempre tarda lo mismo. Con {settings.fixedMinutes}m {settings.fixedSeconds}s,
+            el primer susto llega {settings.fixedMinutes}m {settings.fixedSeconds}s después de pulsar
+            Iniciar, y los siguientes cada {settings.fixedMinutes}m {settings.fixedSeconds}s.
+          </div>
+
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-300">
-              Tiempo entre cada jumpscare consecutivo:
+              Espera entre un susto y el siguiente:
             </span>
             <span className="text-xs font-mono tabular-nums text-sky-400 bg-sky-950/40 px-2 py-0.5 rounded border border-sky-800/50">
-              Total: {settings.fixedMinutes * 60 + settings.fixedSeconds} segundos
+              {settings.fixedMinutes} min {settings.fixedSeconds} seg
             </span>
           </div>
 
@@ -139,7 +147,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
           </div>
 
           <p className="text-[11px] text-slate-400">
-            El programa reproducirá un susto automáticamente cada vez que termine este intervalo y volverá a reiniciar la cuenta.
+            Pon los minutos y los segundos. Después de cada susto, la cuenta vuelve a empezar sola.
           </p>
         </div>
       )}
@@ -147,9 +155,16 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
       {/* Mode 2 Specific Controls: Random Interval */}
       {currentMode === 'random' && (
         <div className="bg-[#0e1523] border border-slate-800/80 rounded-lg p-4 space-y-3">
+          <div className="rounded-lg bg-rose-950/30 border border-rose-800/50 p-3 text-xs text-rose-200 leading-relaxed">
+            <strong className="block mb-0.5 text-rose-100">Así funciona:</strong>
+            Eliges un mínimo y un máximo. Cada vez, el programa escoge una hora al azar dentro de ese
+            rango, así que nunca sabes cuándo llega. Ejemplo: entre {settings.randomMinMinutes}m y{' '}
+            {settings.randomMaxMinutes}m puede salir a los 7 minutos, luego a los 21, luego a los 12…
+          </div>
+
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-300">
-              Rango de tiempo aleatorio entre sustos:
+              Espera mínima y máxima entre sustos:
             </span>
             <span className="text-xs font-mono tabular-nums text-rose-400 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-800/50">
               {settings.randomMinMinutes}m {settings.randomMinSeconds}s — {settings.randomMaxMinutes}m {settings.randomMaxSeconds}s
@@ -160,7 +175,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
             {/* Min Range */}
             <div className="p-3 bg-[#0b0f17] rounded-lg border border-slate-800">
               <span className="text-xs font-medium text-slate-300 block mb-2">
-                Tiempo Mínimo de Espera
+                Lo mínimo que esperará
               </span>
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -197,7 +212,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
             {/* Max Range */}
             <div className="p-3 bg-[#0b0f17] rounded-lg border border-slate-800">
               <span className="text-xs font-medium text-slate-300 block mb-2">
-                Tiempo Máximo de Espera
+                Lo máximo que esperará
               </span>
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -235,11 +250,11 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
           {isRandomInvalid ? (
             <div className="flex items-center gap-2 p-2.5 rounded-lg bg-rose-950/50 border border-rose-800 text-rose-300 text-xs">
               <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>El tiempo máximo debe ser estrictamente mayor que el tiempo mínimo.</span>
+              <span>El valor máximo tiene que ser mayor que el mínimo.</span>
             </div>
           ) : (
             <p className="text-[11px] text-slate-400">
-              Tras cada susto, el programa genera un nuevo intervalo estrictamente contenido dentro de este rango.
+              Cuanto más ancho sea el rango, más impredecible será el susto.
             </p>
           )}
         </div>
@@ -248,30 +263,44 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
       {/* Mode 3 Specific Controls: Probability */}
       {currentMode === 'probability' && (
         <div className="bg-[#0e1523] border border-slate-800/80 rounded-lg p-4 space-y-4">
+          <div className="rounded-lg bg-amber-950/30 border border-amber-800/50 p-3 text-xs text-amber-200 leading-relaxed">
+            <strong className="block mb-0.5 text-amber-100">Así funciona:</strong>
+            Cada {settings.checkIntervalSeconds} segundos el programa hace una tirada de dado: con un{' '}
+            {settings.probabilityPercent}% de probabilidad sale el susto; si no sale, vuelve a tirar
+            más tarde. No es un cronómetro: puede salir enseguida o tardar bastante. Aunque subas
+            mucho el %, el enfriamiento de {settings.minCooldownSeconds}s impide dos sustos seguidos.
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-[11px] text-slate-300 mb-1">
-                Frecuencia de Comprobación
+                Cada cuántos segundos hace la tirada
               </label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  min="5"
+                  min="1"
                   max="600"
+                  step="1"
                   value={settings.checkIntervalSeconds}
                   onChange={(e) =>
-                    onChange({ checkIntervalSeconds: Math.max(5, parseInt(e.target.value) || 5) })
+                    onChange({
+                      checkIntervalSeconds: Math.max(
+                        1,
+                        Math.min(600, parseFloat(e.target.value) || 1)
+                      ),
+                    })
                   }
                   className="w-full bg-[#0b0f17] border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono tabular-nums focus:outline-none focus:border-amber-500"
                 />
                 <span className="text-xs text-slate-400">seg</span>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1 block">Cada cuánto se evalúa</span>
+              <span className="text-[10px] text-slate-500 mt-1 block">Mínimo 1 segundo</span>
             </div>
 
             <div>
               <label className="block text-[11px] text-slate-300 mb-1">
-                Probabilidad por Intento
+                Probabilidad de que salga (%)
               </label>
               <div className="flex items-center gap-2">
                 <input
@@ -292,17 +321,17 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
                 />
                 <span className="text-xs text-slate-400">%</span>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1 block">Rango permitido 0.1% a 100%</span>
+              <span className="text-[10px] text-slate-500 mt-1 block">0.1% = casi nunca · 100% = siempre</span>
             </div>
 
             <div>
               <label className="block text-[11px] text-slate-300 mb-1">
-                Espera Mínima (Cooldown)
+                Espera mínima entre sustos
               </label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  min="10"
+                  min="1"
                   max="1800"
                   value={settings.minCooldownSeconds}
                   onChange={(e) =>
@@ -312,20 +341,26 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ settings, onChange }
                 />
                 <span className="text-xs text-slate-400">seg</span>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1 block">Evita sustos en cascada</span>
+              <span className="text-[10px] text-slate-500 mt-1 block">Nunca habrá dos sustos más seguidos que esto</span>
             </div>
           </div>
 
-          {/* Mathematical clarification note as explicitly requested in brief */}
-          <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-950/20 border border-amber-800/40 text-amber-300 text-xs leading-relaxed">
-            <Info className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+          <div className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-900/60 border border-slate-700/60 text-slate-300 text-xs leading-relaxed">
+            <Info className="h-4 w-4 shrink-0 text-slate-400 mt-0.5" />
             <div>
-              <strong className="font-semibold block text-amber-200 mb-0.5">
-                Principio Matemático de Independencia Estocástica:
-              </strong>
-              Una probabilidad del {settings.probabilityPercent}% por comprobación <em>no garantiza</em> un jumpscare cada{' '}
-              {Math.round((settings.checkIntervalSeconds * (100 / settings.probabilityPercent)) / 60)} minutos.
-              Cada comprobación constituye un nuevo intento independiente (ensayo de Bernoulli) cuando el tiempo mínimo de enfriamiento ({settings.minCooldownSeconds}s) se haya cumplido.
+              <strong className="font-semibold block text-slate-200 mb-0.5">Ejemplo con tus valores:</strong>
+              Tirada cada {settings.checkIntervalSeconds}s con {settings.probabilityPercent}% de salir →
+              en promedio un susto cada ~
+              {Math.max(
+                1,
+                Math.round(
+                  (Math.max(settings.checkIntervalSeconds, settings.minCooldownSeconds) *
+                    (100 / settings.probabilityPercent)) /
+                    60
+                )
+              )}{' '}
+              minutos, respetando la espera mínima de {settings.minCooldownSeconds}s. Puede salir antes o
+              después: es una media, no una promesa.
             </div>
           </div>
         </div>

@@ -17,6 +17,10 @@ export interface JumpscareVideo {
   chromaKeyTolerance?: number; // 0 to 100
   chromaKeySmoothness?: number; // 0 to 100
   speed?: number; // 0.2 to 5.0 (default 1.0)
+  /** Amplificación del audio en % (100 = normal, hasta 500). Por defecto 300 */
+  volumeBoost?: number;
+  /** Nombre original del archivo importado */
+  fileName?: string;
 }
 
 export interface AppSettings {
@@ -44,7 +48,7 @@ export interface AppSettings {
   maxScaresPerSession: number; // 0 for unlimited
   masterVolume: number; // 0 to 100
   audioEnabled: boolean;
-  targetMonitor: number;
+  targetDisplayId: string; // '' = pantalla principal
   fullscreen: boolean;
   panicKey: string; // 'Escape' | 'F10' | 'Space'
 
@@ -66,4 +70,54 @@ export interface SessionStats {
   nextCheckTime: number | null;
   systemState: 'idle' | 'running' | 'waiting_for_game' | 'paused' | 'cooling_down';
   gameDetected: boolean;
+  /** Modo probabilidad: tiradas realizadas y resultado de la última */
+  probabilityRolls: number;
+  lastRollPercent: number | null;
+  lastRollHit: boolean;
 }
+
+export interface FoxyDisplay {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+  scaleFactor: number;
+  primary: boolean;
+}
+
+export interface ScarePayload {
+  src: string;
+  /** Bytes del archivo cuando la fuente es un blob del renderer principal */
+  blobData?: ArrayBuffer | Uint8Array;
+  mime?: string;
+  name: string;
+  mediaType: 'video' | 'audio';
+  duration: number;
+  /** Volumen final combinado (0 a 1) */
+  volume: number;
+  speed: number;
+  chromaKeyEnabled: boolean;
+  chromaKeyTolerance: number;
+  chromaKeySmoothness: number;
+  /** Amplificación del audio en % (100 = normal) */
+  volumeBoost: number;
+  panicKey: string;
+  fullscreen: boolean;
+  displayId: string;
+}
+
+export interface FoxyApi {
+  getDisplays(): Promise<FoxyDisplay[]>;
+  showScare(payload: ScarePayload): Promise<void>;
+  closeScare(): Promise<void>;
+  onScareFinished(callback: () => void): () => void;
+  consumeScarePayload(): Promise<ScarePayload | null>;
+  finishScare(): void;
+}
+
+declare global {
+  interface Window {
+    foxy?: FoxyApi;
+  }
+}
+

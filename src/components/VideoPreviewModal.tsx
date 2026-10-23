@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X, Volume2, ShieldAlert, Sparkles } from 'lucide-react';
 import { JumpscareVideo } from '../types';
 import { soundEffects } from '../services/soundEffects';
+import { ChromaKeyRenderer } from '../services/chromaKeyRenderer';
 
 interface VideoPreviewModalProps {
   video: JumpscareVideo | null;
@@ -17,8 +18,11 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
   onClose,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioElRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameIdRef = useRef<number | null>(null);
+  const audioGraphRef = useRef<{ element: HTMLMediaElement; context: AudioContext; gain: GainNode } | null>(
+    null
+  );
   const [showExtracted, setShowExtracted] = useState<boolean>(true);
 
   useEffect(() => {
@@ -44,7 +48,60 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [video, masterVolume, playbackSpeed, onClose]);
 
-  // Real-time Chroma Key canvas loop in preview modal
+  // Amplificación de audio (misma cadena que en el susto real)
+  useEffect(() => {
+    const element = video?.mediaType === 'audio' ? audioElRef.current : videoRef.current;
+    if (!video || !element) return;
+
+    const AudioContextCtor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+    if (!AudioContextCtor) return;
+
+    let graph = audioGraphRef.current;
+
+    if (!graph || graph.element !== element) {
+      if (graph) void graph.context.close().catch(() => {});
+
+      try {
+        const context = new AudioContextCtor();
+        const source = context.createMediaElementSource(element);
+        const gain = context.createGain();
+        const limiter = context.createDynamicsCompressor();
+
+        limiter.threshold.value = -3;
+        limiter.knee.value = 0;
+        limiter.ratio.value = 20;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.25;
+
+        source.connect(gain);
+        gain.connect(limiter);
+        limiter.connect(context.destination);
+
+        graph = { element, context, gain };
+        audioGraphRef.current = graph;
+      } catch {
+        return;
+      }
+    }
+
+    graph.gain.gain.value = Math.min(5, Math.max(1, (video.volumeBoost ?? 300) / 100));
+    void graph.context.resume().catch(() => {});
+  }, [video?.id, video?.volumeBoost, video?.mediaType]);
+
+  useEffect(
+    () => () => {
+      if (audioGraphRef.current) {
+        void audioGraphRef.current.context.close().catch(() => {});
+        audioGraphRef.current = null;
+      }
+    },
+    []
+  );
+
+  // Chroma key con el MISMO motor que el susto real (WebGL): misma tolerancia y mismo suavizado.
   useEffect(() => {
     if (!video || !video.chromaKeyEnabled || !showExtracted) return;
 
@@ -52,78 +109,85 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
     const canvas = canvasRef.current;
     if (!videoEl || !canvas) return;
 
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
+    const renderer = new ChromaKeyRenderer(canvas);
+    if (!renderer.isReady) return;
 
-    const tolerance = (video.chromaKeyTolerance ?? 42) / 100;
-    const targetG = 255;
-    const targetR = 0;
-    const targetB = 0;
-
-    let isCancelled = false;
-
-    const renderLoop = () => {
-      if (isCancelled || videoEl.paused || videoEl.ended) {
-        if (!isCancelled && !videoEl.ended) {
-          animFrameIdRef.current = requestAnimationFrame(renderLoop);
-        }
-        return;
-      }
-
-      if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
-        if (canvas.width !== videoEl.videoWidth || canvas.height !== videoEl.videoHeight) {
-          canvas.width = videoEl.videoWidth;
-          canvas.height = videoEl.videoHeight;
-        }
-
-        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const l = frame.data.length / 4;
-
-        for (let i = 0; i < l; i++) {
-          const r = frame.data[i * 4 + 0];
-          const g = frame.data[i * 4 + 1];
-          const b = frame.data[i * 4 + 2];
-
-          const isGreenDominant = g > 70 && g > r * 1.25 && g > b * 1.25;
-          const diff = Math.sqrt(
-            Math.pow(r - targetR, 2) + Math.pow(g - targetG, 2) + Math.pow(b - targetB, 2)
-          ) / 441.67;
-
-          if (isGreenDominant || diff < tolerance) {
-            frame.data[i * 4 + 3] = 0;
-          }
-        }
-        ctx.putImageData(frame, 0, 0);
-      }
-
-      animFrameIdRef.current = requestAnimationFrame(renderLoop);
+    const settings = {
+      enabled: true,
+      tolerance: video.chromaKeyTolerance ?? 42,
+      smoothness: video.chromaKeySmoothness ?? 25,
     };
 
-    videoEl.onplay = () => {
-      animFrameIdRef.current = requestAnimationFrame(renderLoop);
+    let cancelled = false;
+    let animationFrameId: number | null = null;
+    let videoFrameId: number | null = null;
+
+    const frameVideo = videoEl as HTMLVideoElement & {
+      requestVideoFrameCallback?: (callback: () => void) => number;
+      cancelVideoFrameCallback?: (id: number) => void;
     };
 
-    animFrameIdRef.current = requestAnimationFrame(renderLoop);
+    const draw = () => {
+      if (cancelled) return;
+      renderer.render(videoEl, settings, 'contain');
+    };
+
+    const scheduleNextFrame = () => {
+      if (cancelled) return;
+
+      if (typeof frameVideo.requestVideoFrameCallback === 'function') {
+        videoFrameId = frameVideo.requestVideoFrameCallback(() => {
+          draw();
+          scheduleNextFrame();
+        });
+      } else {
+        animationFrameId = requestAnimationFrame(() => {
+          draw();
+          scheduleNextFrame();
+        });
+      }
+    };
+
+    draw();
+    scheduleNextFrame();
 
     return () => {
-      isCancelled = true;
-      if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
+      cancelled = true;
+      if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+      if (videoFrameId !== null && typeof frameVideo.cancelVideoFrameCallback === 'function') {
+        frameVideo.cancelVideoFrameCallback(videoFrameId);
+      }
+      renderer.dispose();
     };
-  }, [video, showExtracted]);
+  }, [
+    video?.id,
+    video?.chromaKeyEnabled,
+    video?.chromaKeyTolerance,
+    video?.chromaKeySmoothness,
+    showExtracted,
+  ]);
 
   if (!video) return null;
 
-  const effectiveVolPercent = Math.round((masterVolume / 100) * video.volume);
+  const effectiveVolPercent = Math.round(
+    (masterVolume / 100) * video.volume * ((video.volumeBoost ?? 300) / 100)
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
       <div className="w-full max-w-xl rounded-xl border border-slate-800 bg-[#121927] overflow-hidden shadow-2xl">
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-slate-800/80 px-5 py-3.5 bg-slate-900/50">
-          <div className="flex items-center gap-2 text-slate-200">
-            <ShieldAlert className="h-4 w-4 text-amber-500" />
-            <span className="text-sm font-semibold truncate max-w-md">{video.name}</span>
+          <div className="flex items-center gap-2 text-slate-200 min-w-0">
+            <ShieldAlert className="h-4 w-4 text-amber-500 shrink-0" />
+            <div className="min-w-0">
+              <span className="text-sm font-semibold truncate block max-w-md">{video.name}</span>
+              {video.fileName && (
+                <span className="text-[10px] font-mono text-slate-500 truncate block max-w-md">
+                  {video.fileName}
+                </span>
+              )}
+            </div>
           </div>
           <button
             type="button"
@@ -144,6 +208,7 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
               <h4 className="text-base font-semibold text-slate-100 mb-1">{video.name}</h4>
               <p className="text-xs text-slate-400 mb-4">{video.description || 'Pista de sonido para susto'}</p>
               <audio
+                ref={audioElRef}
                 src={video.src}
                 controls
                 autoPlay
@@ -165,7 +230,7 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
                 />
               )}
 
-              {/* Source Video (always mounted for audio and frames) */}
+              {/* Source Video (siempre montado y reproduciendo para alimentar el canvas) */}
               <video
                 ref={videoRef}
                 src={video.src}
@@ -173,16 +238,18 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
                 autoPlay
                 loop
                 playsInline
-                className={`w-full h-full object-contain ${
-                  video.chromaKeyEnabled && showExtracted ? 'hidden' : 'block'
-                }`}
+                className={
+                  video.chromaKeyEnabled && showExtracted
+                    ? 'pointer-events-none absolute inset-0 h-full w-full opacity-0'
+                    : 'relative h-full w-full object-contain'
+                }
               />
 
-              {/* Chroma Key Canvas */}
+              {/* Chroma Key Canvas (mismo render que el susto real) */}
               {video.chromaKeyEnabled && (
                 <canvas
                   ref={canvasRef}
-                  className={`w-full h-full object-contain relative z-10 ${
+                  className={`h-full w-full object-contain relative z-10 ${
                     showExtracted ? 'block' : 'hidden'
                   }`}
                 />
@@ -227,3 +294,4 @@ export const VideoPreviewModal: React.FC<VideoPreviewModalProps> = ({
     </div>
   );
 };
+

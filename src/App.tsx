@@ -16,6 +16,7 @@ import { VideoPreviewModal } from './components/VideoPreviewModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { CodeExplorerModal } from './components/CodeExplorerModal';
 import { downloadProjectZip } from './services/pythonProjectGenerator';
+import { buildScarePayload } from './services/desktopBridge';
 import { soundEffects } from './services/soundEffects';
 
 const STORAGE_KEY = 'random_jumpscare_win11_config';
@@ -38,7 +39,7 @@ const INITIAL_SETTINGS: AppSettings = {
   maxScaresPerSession: 0,
   masterVolume: 100,
   audioEnabled: true,
-  targetMonitor: 0,
+  targetDisplayId: '',
   fullscreen: true,
   panicKey: 'Escape',
   gameFilterEnabled: true,
@@ -74,8 +75,18 @@ export default function App() {
       if (savedLib) {
         const parsed = JSON.parse(savedLib);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Remove old polygon clips
-          const cleaned = parsed.filter((v: JumpscareVideo) => !BANNED_POLYGON_IDS.has(v.id));
+          // Remove old polygon clips and dead blob entries (los blob: no sobreviven al reinicio)
+          const cleaned = parsed.filter(
+            (v: JumpscareVideo) =>
+              !BANNED_POLYGON_IDS.has(v.id) &&
+              !(
+                v.sourceType === 'custom_file' &&
+                typeof v.src === 'string' &&
+                v.src.startsWith('blob:')
+              )
+            )
+            // Las entradas antiguas sin amplificación pasan a 300 % por defecto.
+            .map((v: JumpscareVideo) => ({ ...v, volumeBoost: v.volumeBoost ?? 300 }));
           const existingIds = new Set(cleaned.map((v: JumpscareVideo) => v.id));
           const missingDefaults = DEFAULT_VIDEOS.filter((dv) => !existingIds.has(dv.id));
           return [...missingDefaults, ...cleaned];
@@ -97,10 +108,14 @@ export default function App() {
     nextCheckTime: null,
     systemState: 'idle',
     gameDetected: true, // Default to true so user can immediately test
+    probabilityRolls: 0,
+    lastRollPercent: null,
+    lastRollHit: false,
   });
 
   const [secondsRemaining, setSecondsRemaining] = useState<number>(0);
   const [activeScareVideo, setActiveScareVideo] = useState<JumpscareVideo | null>(null);
+  const [inPageScare, setInPageScare] = useState<boolean>(false);
   const [previewVideo, setPreviewVideo] = useState<JumpscareVideo | null>(null);
   const [videoToDelete, setVideoToDelete] = useState<JumpscareVideo | null>(null);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState<boolean>(false);
@@ -153,21 +168,44 @@ export default function App() {
   }, [library, settings.preventConsecutiveRepetition]);
 
   // Trigger jumpscare
-  const triggerJumpscare = useCallback((videoToPlay?: JumpscareVideo) => {
-    const video = videoToPlay || selectNextVideo();
-    if (!video) return;
+  const triggerJumpscare = useCallback(
+    (videoToPlay?: JumpscareVideo): boolean => {
+      const video = videoToPlay || selectNextVideo();
+      if (!video) return false;
 
-    setActiveScareVideo(video);
-    setStats((prev) => ({
-      ...prev,
-      scaresTriggered: prev.scaresTriggered + 1,
-      lastScareTime: Date.now(),
-      lastScareName: video.name,
-      systemState: 'running',
-    }));
-  }, [selectNextVideo]);
+      setActiveScareVideo(video);
+      setStats((prev) => ({
+        ...prev,
+        scaresTriggered: prev.scaresTriggered + 1,
+        lastScareTime: Date.now(),
+        lastScareName: video.name,
+        systemState: 'running',
+      }));
 
-  // Compute next interval based on mode
+      const foxy = window.foxy;
+      if (!foxy) {
+        // Navegador: overlay dentro de la propia página.
+        setInPageScare(true);
+        return true;
+      }
+
+      setInPageScare(false);
+      void (async () => {
+        try {
+          const payload = await buildScarePayload(video, settings);
+          await foxy.showScare(payload);
+        } catch {
+          // Si la ventana de overlay falla, el susto se muestra dentro de la app.
+          setInPageScare(true);
+        }
+      })();
+
+      return true;
+    },
+    [selectNextVideo, settings]
+  );
+
+  // Compute next interval based on mode (en segundos, admite fracciones)
   const getNextDuration = useCallback(() => {
     if (settings.mode === 'fixed') {
       return settings.fixedMinutes * 60 + settings.fixedSeconds;
@@ -176,43 +214,155 @@ export default function App() {
       const maxSec = settings.randomMaxMinutes * 60 + settings.randomMaxSeconds;
       const safeMin = Math.max(1, minSec);
       const safeMax = Math.max(safeMin + 1, maxSec);
-      return Math.floor(Math.random() * (safeMax - safeMin + 1)) + safeMin;
+      // Precisión de milisegundos dentro del rango
+      return safeMin + Math.random() * (safeMax - safeMin);
     } else {
       // Mode 3: Probability check cycle
-      return settings.checkIntervalSeconds;
+      return Math.max(1, settings.checkIntervalSeconds);
     }
   }, [settings]);
+
+  /* ------------------------------------------------------------------ *
+   * Motor de tiempos preciso
+   * Usa una fecha límite absoluta (deadlineRef) en lugar de contar ticks,
+   * así no acumula deriva y dispara con precisión de ~100 ms.
+   * ------------------------------------------------------------------ */
+  const statsRef = useRef(stats);
+  const settingsRef = useRef(settings);
+  const triggerRef = useRef(triggerJumpscare);
+  const getNextDurationRef = useRef(getNextDuration);
+  const deadlineRef = useRef<number | null>(null);
+  const remainingMsRef = useRef(0);
+  const deadlineTimeoutRef = useRef<number | null>(null);
+  const engineTickRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    statsRef.current = stats;
+  }, [stats]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    triggerRef.current = triggerJumpscare;
+  }, [triggerJumpscare]);
+
+  useEffect(() => {
+    getNextDurationRef.current = getNextDuration;
+  }, [getNextDuration]);
+
+  const clearDeadlineTimeout = () => {
+    if (deadlineTimeoutRef.current !== null) {
+      window.clearTimeout(deadlineTimeoutRef.current);
+      deadlineTimeoutRef.current = null;
+    }
+  };
+
+  // Programa el disparo exacto (no depende del sondeo de 100 ms del temporizador visual).
+  const scheduleDeadlineTimeout = (ms: number) => {
+    clearDeadlineTimeout();
+    deadlineTimeoutRef.current = window.setTimeout(() => {
+      deadlineTimeoutRef.current = null;
+      engineTickRef.current();
+    }, Math.max(0, ms) + 2);
+  };
+
+  const armTimer = useCallback((seconds: number) => {
+    const ms = Math.max(0, Math.round(seconds * 1000));
+    remainingMsRef.current = ms;
+    deadlineRef.current = Date.now() + ms;
+    setSecondsRemaining(ms >= 10000 ? Math.ceil(ms / 1000) : Math.round(ms / 100) / 10);
+    scheduleDeadlineTimeout(ms);
+  }, []);
+
+  const disarmTimer = useCallback(() => {
+    clearDeadlineTimeout();
+    deadlineRef.current = null;
+    remainingMsRef.current = 0;
+    setSecondsRemaining(0);
+  }, []);
+
+  const freezeTimer = useCallback(() => {
+    clearDeadlineTimeout();
+    if (deadlineRef.current !== null) {
+      remainingMsRef.current = Math.max(0, deadlineRef.current - Date.now());
+      deadlineRef.current = null;
+    }
+  }, []);
+
+  // Si cambias la frecuencia de comprobación en Modo 3, la nueva cuenta empieza ya.
+  const activeScareRef = useRef<JumpscareVideo | null>(activeScareVideo);
+  const lastCheckIntervalRef = useRef(settings.checkIntervalSeconds);
+
+  useEffect(() => {
+    activeScareRef.current = activeScareVideo;
+  }, [activeScareVideo]);
+
+  useEffect(() => {
+    const changed = lastCheckIntervalRef.current !== settings.checkIntervalSeconds;
+    lastCheckIntervalRef.current = settings.checkIntervalSeconds;
+
+    if (!changed || settings.mode !== 'probability') return;
+    if (statsRef.current.systemState !== 'running' || activeScareRef.current) return;
+
+    deadlineRef.current = Date.now() + Math.max(1, settings.checkIntervalSeconds) * 1000;
+    remainingMsRef.current = Math.max(1, settings.checkIntervalSeconds) * 1000;
+    setSecondsRemaining(
+      settings.checkIntervalSeconds >= 10
+        ? Math.ceil(settings.checkIntervalSeconds)
+        : Math.round(settings.checkIntervalSeconds * 10) / 10
+    );
+    scheduleDeadlineTimeout(remainingMsRef.current);
+  }, [settings.checkIntervalSeconds, settings.mode]);
+
+  const resumeTimer = useCallback(() => {
+    const ms = remainingMsRef.current;
+    deadlineRef.current = Date.now() + Math.max(0, ms);
+    setSecondsRemaining(ms >= 10000 ? Math.ceil(ms / 1000) : Math.round(ms / 100) / 10);
+    scheduleDeadlineTimeout(Math.max(0, ms));
+  }, []);
 
   // Start engine
   const handleToggleStart = () => {
     soundEffects.playClick();
     if (stats.systemState === 'idle') {
       const initialDelay = settings.initialDelaySeconds;
-      setSecondsRemaining(initialDelay > 0 ? initialDelay : getNextDuration());
       setStats((prev) => ({
         ...prev,
         sessionStartTime: Date.now(),
         systemState: 'running',
         scaresTriggered: 0,
+        probabilityRolls: 0,
+        lastRollPercent: null,
+        lastRollHit: false,
       }));
+      armTimer(initialDelay > 0 ? initialDelay : getNextDuration());
     } else {
       // Stop
       setStats((prev) => ({
         ...prev,
         systemState: 'idle',
       }));
-      setSecondsRemaining(0);
+      disarmTimer();
       setActiveScareVideo(null);
+      setInPageScare(false);
+      void window.foxy?.closeScare();
     }
   };
 
   // Pause engine
   const handleTogglePause = () => {
     soundEffects.playClick();
+    const willPause = stats.systemState !== 'paused';
+
     setStats((prev) => ({
       ...prev,
       systemState: prev.systemState === 'paused' ? 'running' : 'paused',
     }));
+
+    if (willPause) freezeTimer();
+    else resumeTimer();
   };
 
   // Immediate scare test
@@ -224,6 +374,7 @@ export default function App() {
   // Finished scare callback
   const handleScareFinished = () => {
     setActiveScareVideo(null);
+    setInPageScare(false);
 
     // Check session limit
     if (
@@ -231,86 +382,141 @@ export default function App() {
       stats.scaresTriggered >= settings.maxScaresPerSession
     ) {
       setStats((prev) => ({ ...prev, systemState: 'idle' }));
+      disarmTimer();
       return;
     }
 
     // Post-scare pause if configured
     if (settings.postScarePauseSeconds > 0) {
       setStats((prev) => ({ ...prev, systemState: 'cooling_down' }));
-      setSecondsRemaining(settings.postScarePauseSeconds);
+      armTimer(settings.postScarePauseSeconds);
     } else {
-      setSecondsRemaining(getNextDuration());
       setStats((prev) => ({ ...prev, systemState: 'running' }));
+      armTimer(getNextDuration());
     }
   };
 
-  // Main Scheduler loop (1-second tick)
-  useEffect(() => {
-    if (stats.systemState === 'idle' || stats.systemState === 'paused' || activeScareVideo) {
-      return;
-    }
 
-    const interval = setInterval(() => {
-      // Check game process restriction
-      if (settings.gameFilterEnabled && !stats.gameDetected) {
-        if (settings.pauseTimerWhenGameClosed) {
-          if (stats.systemState !== 'waiting_for_game') {
-            setStats((prev) => ({ ...prev, systemState: 'waiting_for_game' }));
-          }
-          return;
-        }
-      } else if (stats.systemState === 'waiting_for_game') {
-        setStats((prev) => ({ ...prev, systemState: 'running' }));
+  // La ventana de overlay avisa cuando el susto termina (vídeo finalizado o tecla de pánico).
+  const scareFinishedRef = useRef(handleScareFinished);
+
+  useEffect(() => {
+    scareFinishedRef.current = handleScareFinished;
+  }, [handleScareFinished]);
+
+  useEffect(() => {
+    const foxy = window.foxy;
+    if (!foxy) return;
+
+    return foxy.onScareFinished(() => {
+      setInPageScare(false);
+      scareFinishedRef.current();
+    });
+  }, []);
+
+  // Bucle del motor: revisa la fecha límite cada 100 ms (precisión ~0,1 s, sin deriva)
+  useEffect(() => {
+    const tick = () => {
+      const current = statsRef.current;
+      const cfg = settingsRef.current;
+
+      if (current.systemState === 'idle' || current.systemState === 'paused') return;
+      if (current.systemState === 'waiting_for_game') {
+        // Si el juego vuelve a estar abierto, se reanuda exactamente donde quedó.
+        const stillWaiting =
+          cfg.gameFilterEnabled && !current.gameDetected && cfg.pauseTimerWhenGameClosed;
+        if (stillWaiting) return;
+
+        setStats((prev) =>
+          prev.systemState === 'waiting_for_game' ? { ...prev, systemState: 'running' } : prev
+        );
+        resumeTimer();
+        return;
       }
 
-      setSecondsRemaining((prev) => {
-        if (prev <= 1) {
-          // Timer reached 0!
-          if (stats.systemState === 'cooling_down') {
-            // Cooldown complete, start normal cycle
-            setStats((s) => ({ ...s, systemState: 'running' }));
-            return getNextDuration();
-          }
+      // Filtro de juego: congela el tiempo mientras el proceso no exista.
+      const shouldWait =
+        cfg.gameFilterEnabled && !current.gameDetected && cfg.pauseTimerWhenGameClosed;
 
-          if (settings.mode === 'probability') {
-            // Mode 3: Evaluate Bernoulli trial
-            const now = Date.now();
-            const cooldownMs = settings.minCooldownSeconds * 1000;
-            const canTrigger = !stats.lastScareTime || now - stats.lastScareTime >= cooldownMs;
+      if (shouldWait) {
+        freezeTimer();
+        setStats((prev) =>
+          prev.systemState === 'waiting_for_game' ? prev : { ...prev, systemState: 'waiting_for_game' }
+        );
+        return;
+      }
 
-            if (canTrigger) {
-              const roll = Math.random() * 100;
-              if (roll <= settings.probabilityPercent) {
-                // Susto activado!
-                triggerJumpscare();
-              }
-            }
-            return settings.checkIntervalSeconds;
-          } else {
-            // Mode 1 or Mode 2
-            triggerJumpscare();
-            return getNextDuration();
-          }
+      if (deadlineRef.current === null) return;
+
+      const remainingMs = deadlineRef.current - Date.now();
+      const remainingSec = remainingMs / 1000;
+      // Bajo 10 s mostramos décimas para que se note la precisión.
+      const displaySeconds =
+        remainingSec >= 10
+          ? Math.ceil(remainingSec)
+          : Math.max(0, Math.round(remainingSec * 10) / 10);
+      setSecondsRemaining((prev) => (prev === displaySeconds ? prev : displaySeconds));
+
+      if (remainingMs > 0) return;
+
+      // --- Se cumplió el tiempo ---
+      deadlineRef.current = null;
+      clearDeadlineTimeout();
+
+      if (current.systemState === 'cooling_down') {
+        setStats((prev) => ({ ...prev, systemState: 'running' }));
+        armTimer(getNextDurationRef.current());
+        return;
+      }
+
+      if (cfg.mode === 'probability') {
+        const cooldownMs = Math.max(0, cfg.minCooldownSeconds) * 1000;
+        const cooldownEnd = (current.lastScareTime ?? 0) + cooldownMs;
+        const now = Date.now();
+
+        // En enfriamiento no gastamos tiradas: esperamos a que se cumpla el mínimo.
+        if (current.lastScareTime && now < cooldownEnd) {
+          const waitMs = Math.min(Math.max(1, cfg.checkIntervalSeconds) * 1000, cooldownEnd - now);
+          armTimer(waitMs / 1000);
+          return;
         }
-        return prev - 1;
-      });
-    }, 1000);
 
-    return () => clearInterval(interval);
-  }, [
-    stats.systemState,
-    stats.gameDetected,
-    stats.lastScareTime,
-    activeScareVideo,
-    settings.gameFilterEnabled,
-    settings.pauseTimerWhenGameClosed,
-    settings.mode,
-    settings.minCooldownSeconds,
-    settings.probabilityPercent,
-    settings.checkIntervalSeconds,
-    getNextDuration,
-    triggerJumpscare,
-  ]);
+        const roll = Math.random() * 100;
+        const hit = roll < cfg.probabilityPercent;
+
+        setStats((prev) => ({
+          ...prev,
+          probabilityRolls: prev.probabilityRolls + 1,
+          lastRollPercent: Math.round(roll * 10) / 10,
+          lastRollHit: hit,
+        }));
+
+        if (hit) {
+          const started = triggerRef.current();
+          if (started) return; // el siguiente armado ocurre al terminar el susto
+        }
+
+        armTimer(Math.max(1, cfg.checkIntervalSeconds));
+        return;
+      }
+
+      // Modo fijo / aleatorio
+      const started = triggerRef.current();
+      if (!started) {
+        // Sin vídeos activos: reintenta en el siguiente intervalo en vez de quedarse parado.
+        armTimer(Math.max(1, getNextDurationRef.current()));
+      }
+    };
+
+    engineTickRef.current = tick;
+    const interval = window.setInterval(tick, 100);
+
+    return () => {
+      engineTickRef.current = () => {};
+      window.clearInterval(interval);
+      clearDeadlineTimeout();
+    };
+  }, [armTimer, freezeTimer, resumeTimer]);
 
   // Library actions
   const handleUpdateVideo = (id: string, updates: Partial<JumpscareVideo>) => {
@@ -375,14 +581,12 @@ export default function App() {
         <GameAndPlaybackSettings settings={settings} onChange={updateSettings} />
       </main>
 
-      {/* 3. Jumpscare Fullscreen Overlay */}
-      {activeScareVideo && (
+      {/* 3. Jumpscare Overlay (solo fallback de navegador; en escritorio se usa la ventana transparente) */}
+      {activeScareVideo && inPageScare && (
         <JumpscareOverlay
           video={activeScareVideo}
           masterVolume={settings.audioEnabled ? settings.masterVolume : 0}
           playbackSpeed={settings.playbackSpeed}
-          disableFlashingEffect={settings.disableFlashingEffect}
-          fullscreen={settings.fullscreen}
           panicKey={settings.panicKey}
           onFinished={handleScareFinished}
         />

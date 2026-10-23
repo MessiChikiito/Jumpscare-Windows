@@ -14,6 +14,76 @@ interface VideoLibraryProps {
   onRequestDelete: (video: JumpscareVideo) => void;
 }
 
+/**
+ * Genera una miniatura del primer fotograma útil del vídeo para reconocerlo en la biblioteca.
+ */
+function generateVideoThumbnail(fileUrl: string, fallbackDuration: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    let settled = false;
+    let timer: number | undefined;
+
+    const finish = (value?: string) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      video.removeAttribute('src');
+      video.load();
+      resolve(value);
+    };
+
+    timer = window.setTimeout(() => finish(), 5000);
+
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = fileUrl;
+
+    video.onloadeddata = () => {
+      const duration =
+        Number.isFinite(video.duration) && video.duration > 0 ? video.duration : fallbackDuration;
+      const seekTo = Math.min(Math.max(0.1, duration * 0.33), Math.max(0.1, duration - 0.1));
+      try {
+        video.currentTime = seekTo;
+      } catch {
+        finish();
+      }
+    };
+
+    video.onseeked = () => {
+      try {
+        if (!video.videoWidth || !video.videoHeight) {
+          finish();
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = 480;
+        canvas.height = Math.max(1, Math.round((480 * video.videoHeight) / video.videoWidth));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          finish();
+          return;
+        }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL('image/jpeg', 0.82));
+      } catch {
+        finish();
+      }
+    };
+
+    video.onerror = () => finish();
+  });
+}
+
+/**
+ * Convierte el valor de un input (texto o número) a un porcentaje 0-100 válido.
+ */
+function clampPercent(raw: string | number, fallback: number): number {
+  const parsed = typeof raw === 'number' ? raw : parseFloat(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(100, Math.max(0, Math.round(parsed)));
+}
+
 export const VideoLibrary: React.FC<VideoLibraryProps> = ({
   library,
   preventConsecutiveRepetition,
@@ -45,33 +115,42 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
       }
 
       const fileUrl = URL.createObjectURL(file);
+      const videoId = `custom_vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
       const tempVideo = document.createElement('video');
       tempVideo.src = fileUrl;
       tempVideo.onloadedmetadata = () => {
         const durationSec = Math.round(tempVideo.duration * 10) / 10 || 3.0;
         const newVideo: JumpscareVideo = {
-          id: `custom_vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          id: videoId,
           name: file.name.replace(/\.[^/.]+$/, ''),
+          fileName: file.name,
           sourceType: 'custom_file',
           mediaType: 'video',
           src: fileUrl,
           duration: durationSec,
           volume: 100,
+          volumeBoost: 300,
           enabled: true,
           description: `Vídeo importado (${(file.size / (1024 * 1024)).toFixed(1)} MB)`,
         };
         onAddVideo(newVideo);
+
+        void generateVideoThumbnail(fileUrl, durationSec).then((thumbnail) => {
+          if (thumbnail) onUpdateVideo(videoId, { thumbnail });
+        });
       };
 
       tempVideo.onerror = () => {
         const newVideo: JumpscareVideo = {
-          id: `custom_vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          id: videoId,
           name: file.name,
+          fileName: file.name,
           sourceType: 'custom_file',
           mediaType: 'video',
           src: fileUrl,
           duration: 3.5,
           volume: 100,
+          volumeBoost: 300,
           enabled: true,
           description: 'Vídeo importado',
         };
@@ -97,11 +176,13 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
         const newAudio: JumpscareVideo = {
           id: `custom_aud_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           name: `Sonido: ${file.name.replace(/\.[^/.]+$/, '')}`,
+          fileName: file.name,
           sourceType: 'custom_file',
           mediaType: 'audio',
           src: fileUrl,
           duration: durationSec,
           volume: 100,
+          volumeBoost: 300,
           enabled: true,
           description: `Sonido de jumpscare (${(file.size / 1024).toFixed(0)} KB)`,
         };
@@ -112,11 +193,13 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
         const newAudio: JumpscareVideo = {
           id: `custom_aud_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           name: `Sonido: ${file.name}`,
+          fileName: file.name,
           sourceType: 'custom_file',
           mediaType: 'audio',
           src: fileUrl,
           duration: 2.5,
           volume: 100,
+          volumeBoost: 300,
           enabled: true,
           description: 'Efecto de audio importado',
         };
@@ -213,7 +296,8 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
       {/* Video & Audio Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
         {library.map((video) => {
-          const effectiveVol = Math.round((masterVolume / 100) * video.volume);
+          const boost = video.volumeBoost ?? 300;
+          const effectiveVol = Math.round((masterVolume / 100) * video.volume * (boost / 100));
           const isAudio = video.mediaType === 'audio';
 
           return (
@@ -245,6 +329,15 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                     {video.duration}s
                   </span>
                 </div>
+
+                {video.fileName && (
+                  <p
+                    className="text-[10px] font-mono text-slate-500 truncate -mt-1 mb-2"
+                    title={video.fileName}
+                  >
+                    {video.fileName}
+                  </p>
+                )}
 
                 {/* Media thumbnail or preview frame */}
                 <div className="relative aspect-video w-full rounded bg-black/60 border border-slate-800 overflow-hidden mb-3 flex items-center justify-center">
@@ -279,6 +372,12 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                       CHROMA KEY
                     </span>
                   ) : null}
+
+                  {video.fileName && (
+                    <span className="absolute bottom-0 inset-x-0 bg-black/75 px-1.5 py-1 text-[9px] font-mono text-slate-300 truncate">
+                      {video.fileName}
+                    </span>
+                  )}
                 </div>
 
                 {video.description && (
@@ -309,8 +408,39 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                   onChange={(e) =>
                     onUpdateVideo(video.id, { volume: parseInt(e.target.value) || 0 })
                   }
-                  className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-rose-500"
+                  style={{ ['--slider-accent' as string]: '#f43f5e' }}
+                  className="w-full range-slider"
                 />
+
+                {/* Amplificación por encima del 100% para vídeos con audio bajo */}
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span className="flex items-center gap-1">
+                    Amplificación:
+                    {boost > 100 && (
+                      <span className="text-[9px] font-mono px-1 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300">
+                        x{(boost / 100).toFixed(2).replace(/0$/, '')}
+                      </span>
+                    )}
+                  </span>
+                  <span className="font-mono tabular-nums text-amber-300">{boost}%</span>
+                </div>
+
+                <input
+                  type="range"
+                  min="100"
+                  max="500"
+                  step="25"
+                  value={boost}
+                  onChange={(e) =>
+                    onUpdateVideo(video.id, { volumeBoost: parseInt(e.target.value) || 300 })
+                  }
+                  style={{ ['--slider-accent' as string]: '#f59e0b' }}
+                  className="w-full range-slider"
+                />
+
+                <span className="text-[10px] text-slate-500 block">
+                  Sube el volumen por encima del 100% (con limitador para que no distorsione).
+                </span>
 
                 {/* Individual speed selector up to 5x */}
                 <div className="flex items-center justify-between text-[11px] text-slate-400">
@@ -349,7 +479,8 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                           onChange={(e) =>
                             onUpdateVideo(video.id, {
                               chromaKeyEnabled: e.target.checked,
-                              chromaKeyTolerance: video.chromaKeyTolerance ?? 40,
+                              chromaKeyTolerance: video.chromaKeyTolerance ?? 42,
+                              chromaKeySmoothness: video.chromaKeySmoothness ?? 25,
                             })
                           }
                           className="rounded border-slate-700 text-emerald-500 focus:ring-0"
@@ -358,27 +489,87 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
                       </label>
                       {video.chromaKeyEnabled && (
                         <span className="text-[10px] font-mono text-emerald-300">
-                          Tol: {video.chromaKeyTolerance ?? 40}%
+                          Tol {video.chromaKeyTolerance ?? 42}% · Suav {video.chromaKeySmoothness ?? 25}%
                         </span>
                       )}
                     </div>
 
                     {video.chromaKeyEnabled && (
-                      <div className="pt-1">
-                        <input
-                          type="range"
-                          min="15"
-                          max="75"
-                          value={video.chromaKeyTolerance ?? 40}
-                          onChange={(e) =>
-                            onUpdateVideo(video.id, {
-                              chromaKeyTolerance: parseInt(e.target.value) || 40,
-                            })
-                          }
-                          className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                        />
-                        <span className="text-[10px] text-slate-400 block mt-0.5">
-                          Elimina el fondo verde en tiempo real sin recuadros
+                      <div className="pt-1 space-y-2">
+                        <div>
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
+                            <span>Tolerancia (cuánto verde quitar)</span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={video.chromaKeyTolerance ?? 42}
+                                onChange={(e) =>
+                                  onUpdateVideo(video.id, {
+                                    chromaKeyTolerance: clampPercent(e.target.value, 42),
+                                  })
+                                }
+                                className="w-14 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] font-mono text-emerald-300 text-right"
+                              />
+                              <span className="text-slate-500">%</span>
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={video.chromaKeyTolerance ?? 42}
+                            onChange={(e) =>
+                              onUpdateVideo(video.id, {
+                                chromaKeyTolerance: clampPercent(e.target.value, 42),
+                              })
+                            }
+                            style={{ ['--slider-accent' as string]: '#22c55e' }}
+                            className="w-full range-slider"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
+                            <span>Suavidad / anti-halo en bordes</span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={video.chromaKeySmoothness ?? 25}
+                                onChange={(e) =>
+                                  onUpdateVideo(video.id, {
+                                    chromaKeySmoothness: clampPercent(e.target.value, 25),
+                                  })
+                                }
+                                className="w-14 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] font-mono text-emerald-300 text-right"
+                              />
+                              <span className="text-slate-500">%</span>
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={video.chromaKeySmoothness ?? 25}
+                            onChange={(e) =>
+                              onUpdateVideo(video.id, {
+                                chromaKeySmoothness: clampPercent(e.target.value, 25),
+                              })
+                            }
+                            style={{ ['--slider-accent' as string]: '#34d399' }}
+                            className="w-full range-slider"
+                          />
+                        </div>
+
+                        <span className="text-[10px] text-slate-400 block">
+                          Arrastra el círculo o escribe el número. Si queda verde sube la
+                          tolerancia; si recorta al personaje, bájala. Si el borde vibra, sube la
+                          suavidad.
                         </span>
                       </div>
                     )}
@@ -430,3 +621,5 @@ export const VideoLibrary: React.FC<VideoLibraryProps> = ({
     </section>
   );
 };
+
+

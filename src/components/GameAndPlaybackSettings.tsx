@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Gamepad2, Sliders, Volume2, Monitor, AlertTriangle, ShieldCheck, Keyboard } from 'lucide-react';
-import { AppSettings } from '../types';
+import { AppSettings, FoxyDisplay } from '../types';
 
 interface GameAndPlaybackSettingsProps {
   settings: AppSettings;
@@ -22,6 +22,29 @@ export const GameAndPlaybackSettings: React.FC<GameAndPlaybackSettingsProps> = (
   settings,
   onChange,
 }) => {
+  const [displays, setDisplays] = useState<FoxyDisplay[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    window.foxy
+      ?.getDisplays()
+      .then((list) => {
+        if (active) setDisplays(list);
+      })
+      .catch(() => {
+        if (active) setDisplays([]);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const selectedDisplayMissing =
+    Boolean(settings.targetDisplayId) &&
+    displays.length > 0 &&
+    !displays.some((display) => display.id === settings.targetDisplayId);
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
       {/* 1. Compatibilidad con Videojuegos */}
@@ -302,17 +325,27 @@ export const GameAndPlaybackSettings: React.FC<GameAndPlaybackSettingsProps> = (
               <div>
                 <label className="block text-[11px] text-slate-300 mb-1 flex items-center gap-1">
                   <Monitor className="h-3.5 w-3.5 text-slate-400" />
-                  Monitor de Destino:
+                  Pantalla del Jumpscare:
                 </label>
                 <select
-                  value={settings.targetMonitor}
-                  onChange={(e) => onChange({ targetMonitor: parseInt(e.target.value) || 0 })}
+                  value={selectedDisplayMissing ? '' : settings.targetDisplayId}
+                  onChange={(e) => onChange({ targetDisplayId: e.target.value })}
                   className="w-full bg-[#0b0f17] border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100"
                 >
-                  <option value={0}>Monitor 1 (Principal)</option>
-                  <option value={1}>Monitor 2 (Secundario)</option>
-                  <option value={2}>Monitor 3</option>
+                  {displays.length === 0 && <option value="">Pantalla principal</option>}
+                  {displays.map((display) => (
+                    <option key={display.id} value={display.id}>
+                      {`${display.label} — ${display.width}×${display.height}${
+                        display.primary ? ' (Principal)' : ''
+                      }`}
+                    </option>
+                  ))}
+                  {selectedDisplayMissing && <option value="">Pantalla no disponible (usar principal)</option>}
                 </select>
+                <span className="text-[10px] text-slate-500 block mt-1">
+                  El susto aparece en esta pantalla. Al minimizar, la app se oculta en la bandeja
+                  (iconos ocultos de la barra de tareas) y sigue funcionando en segundo plano.
+                </span>
               </div>
 
               <div>

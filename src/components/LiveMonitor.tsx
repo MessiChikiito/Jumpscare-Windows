@@ -16,12 +16,26 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
   onToggleSimulatedGame,
 }) => {
   const formatTime = (totalSec: number) => {
-    const mins = Math.floor(Math.max(0, totalSec) / 60);
-    const secs = Math.floor(Math.max(0, totalSec) % 60);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const safe = Math.max(0, Math.round(totalSec * 10) / 10);
+    const mins = Math.floor(safe / 60);
+    const secs = safe % 60;
+
+    if (safe < 10) {
+      // Décimas: 00:03.4
+      return `${mins.toString().padStart(2, '0')}:${secs.toFixed(1).padStart(4, '0')}`;
+    }
+
+    return `${mins.toString().padStart(2, '0')}:${Math.floor(secs)
+      .toString()
+      .padStart(2, '0')}`;
   };
 
   const isGameRunning = stats.gameDetected;
+  const cooldownRemainingSec =
+    settings.mode === 'probability' && stats.lastScareTime
+      ? Math.max(0, Math.round((stats.lastScareTime + settings.minCooldownSeconds * 1000 - Date.now()) / 1000))
+      : 0;
+  const waitingCooldown = stats.systemState === 'running' && cooldownRemainingSec > 0;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-3.5 mb-5">
@@ -37,12 +51,24 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
           {stats.systemState === 'idle' ? '--:--' : formatTime(secondsRemaining)}
         </div>
         <div className="text-[11px] text-slate-400 truncate">
-          {stats.systemState === 'running' && 'Temporizador activo'}
+          {stats.systemState === 'running' && !waitingCooldown && 'Temporizador activo'}
+          {waitingCooldown && `Enfriamiento: faltan ${cooldownRemainingSec}s`}
           {stats.systemState === 'waiting_for_game' && 'En pausa: juego inactivo'}
           {stats.systemState === 'paused' && 'Sistema en pausa manual'}
           {stats.systemState === 'cooling_down' && 'Enfriamiento activo'}
           {stats.systemState === 'idle' && 'Presiona Iniciar para comenzar'}
         </div>
+
+        {settings.mode === 'probability' && stats.systemState !== 'idle' && (
+          <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] font-mono">
+            <span className="text-amber-300/90">Tiradas: {stats.probabilityRolls}</span>
+            {stats.lastRollPercent !== null && (
+              <span className={stats.lastRollHit ? 'text-emerald-400' : 'text-slate-400'}>
+                Última: {stats.lastRollPercent}% {stats.lastRollHit ? '✓ salió' : '✕ no salió'}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 2. Last Scare Card */}
@@ -77,10 +103,10 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
           Modo actual:{' '}
           <strong className="text-slate-300 capitalize">
             {settings.mode === 'fixed'
-              ? 'Intervalo Fijo'
+              ? 'Cada X tiempo'
               : settings.mode === 'random'
-              ? 'Intervalo Aleatorio'
-              : 'Probabilidad'}
+              ? 'Entre X e Y'
+              : 'Al azar (%)'}
           </strong>
         </div>
       </div>
